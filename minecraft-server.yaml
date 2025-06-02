@@ -1,0 +1,297 @@
+# Arquivo YAML para implantar um servidor Minecraft (modo offline) no Kubernetes
+# Imagem Docker: itzg/minecraft-server
+
+---
+# 1. Namespace
+# Cria um namespace dedicado para os recursos do servidor Minecraft.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft-server-ns # Nome do namespace
+spec:
+  finalizers:
+    - kubernetes
+
+---
+# 2. StatefulSet
+# Define o StatefulSet para gerenciar o pod do servidor Minecraft.
+# StatefulSets são ideais para aplicações com estado, como servidores de jogos.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minecraft-server
+  namespace: minecraft-server-ns # Implanta no namespace criado acima
+  labels:
+    app: minecraft-server
+spec:
+  serviceName: minecraft-service # Nome do Service que gerencia este StatefulSet
+  replicas: 1 # Apenas uma réplica para um servidor Minecraft padrão
+  selector:
+    matchLabels:
+      app: minecraft-server # Deve corresponder aos labels do template do pod
+  template:
+    metadata:
+      labels:
+        app: minecraft-server # Labels aplicados ao pod
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux # Garante que o pod rode em nós Linux
+      containers:
+        - name: minecraft-server-container
+          image: itzg/minecraft-server:latest # Imagem Docker do servidor Minecraft
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 25565 # Porta padrão do Minecraft
+              name: minecraft-tcp
+            - containerPort: 25575 # Porta para RCON
+              name: rcon-tcp
+
+          env:
+            # Configurações Essenciais
+            - name: EULA
+              value: "TRUE"
+            - name: ONLINE_MODE
+              value: "false"
+            - name: MEMORY
+              value: ""
+            - name: JVM_XX_OPTS
+              value: "-XX:MaxRAMPercentage=75.0"
+            - name: TYPE
+              value: "FABRIC"
+            - name: VERSION
+              value: "1.21.5"
+              
+            # Configurações de AFK e ociosidade
+            - name: ENABLE_AUTOPAUSE
+              value: "true"
+            - name: AUTOPAUSE_TIMEOUT_EST
+              value: "900" # 15 minutos antes de considerar um jogador como AFK
+            - name: AUTOPAUSE_TIMEOUT_INIT
+              value: "300" # 5 minutos antes de pausar o servidor após o último jogador sair
+            - name: AUTOPAUSE_PERIOD
+              value: "10" # Intervalo em segundos para verificar jogadores AFK
+
+            # Configurações do Jogo (Exemplos)
+            - name: SERVER_NAME
+              value: "🔥Tales of Gozas Server🔥"
+            - name: MOTD
+              value: "§6§l✨ Bem-vindo ao §c§l🔥Tales of Gozas Server🔥§r §6§l✨\n§a§o► Versão 1.21.5 Fabric §e[Modo Offline]"
+            - name: WELCOME_MESSAGE
+              value: "§2Bem-vindo ao servidor, §b{PLAYER}§2! Esperamos que você se divirta conosco.\n§6Regras:\n§f- Respeite os outros jogadores\n§f- Não griefing\n§f- Divirta-se!"
+            - name: DIFFICULTY
+              value: "normal" # easy, normal, hard, peaceful
+            - name: MAX_PLAYERS
+              value: "15"
+            - name: SPAWN_PROTECTION
+              value: "0"
+            - name: ALLOW_NETHER
+              value: "true"
+            - name: ANNOUNCE_PLAYER_ACHIEVEMENTS
+              value: "true"
+            - name: ENABLE_COMMAND_BLOCK
+              value: "false"
+            - name: FORCE_GAMEMODE
+              value: "false"
+            - name: GENERATE_STRUCTURES
+              value: "true"
+            - name: PVP
+              value: "true"
+            - name: VIEW_DISTANCE
+              value: "18"
+            - name: SEED
+              value: "7328636133801045505" # Seed do mundo personalizada
+
+            # Configurações do RCON (habilitado)
+            - name: ENABLE_RCON
+              value: "true"
+            - name: RCON_PORT
+              value: "25575"
+            - name: RCON_PASSWORD
+              value: "minecraft_secure_password" # Recomendado: use uma senha mais segura
+
+          volumeMounts:
+            - name: minecraft-data # Monta o volume persistente
+              mountPath: /data # Diretório onde os dados do servidor são armazenados na imagem
+          resources: # Requisições e limites de recursos (ajuste conforme necessário)
+            requests:
+              memory: "1Gi" # Mínimo de memória requisitada
+              cpu: "500m"   # Mínimo de CPU requisitada (0.5 core)
+            limits:
+              memory: "7Gi" # Máximo de memória permitida
+              cpu: "2000m"  # Máximo de CPU permitida (2 cores)
+          livenessProbe: # Verifica se o container está vivo
+            tcpSocket:
+              port: 25565
+            # initialDelaySeconds: 60 # Espera 60s antes da primeira verificação
+            periodSeconds: 30       # Verifica a cada 30s
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe: # Verifica se o container está pronto para receber tráfego
+            tcpSocket:
+              port: 25565
+            # initialDelaySeconds: 90 # Espera 90s (tempo para o servidor iniciar)
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+  volumeClaimTemplates: # Define o template para o PersistentVolumeClaim
+    - metadata:
+        name: minecraft-data # Nome do PVC
+        namespace: minecraft-server-ns
+      spec:
+        accessModes: [ "ReadWriteOnce" ] # Permite leitura e escrita por um único nó
+        resources:
+          requests:
+            storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
+        # storageClassName: "your-storage-class" # Descomente e ajuste se você tiver uma StorageClass específica
+
+---
+# 3. Service
+# Expõe o servidor Minecraft para acesso externo.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minecraft-service
+  namespace: minecraft-server-ns # No mesmo namespace
+  labels:
+    app: minecraft-server
+spec:
+  type: LoadBalancer # Expõe usando um LoadBalancer (requer suporte do provedor de nuvem)
+  # Se LoadBalancer não estiver disponível (ex: Minikube local), use NodePort:
+  # type: NodePort
+  ports:
+    - port: 25565 # Porta externa
+      targetPort: minecraft-tcp # Porta do container (nomeada no StatefulSet)
+      protocol: TCP
+      name: minecraft-tcp
+    - port: 25575 # Porta externa para RCON
+      targetPort: rcon-tcp # Porta do container para RCON
+      protocol: TCP
+      name: rcon-tcp
+  selector:
+    app: minecraft-server # Seleciona os pods com este label (os do StatefulSet)
+
+---
+# 4. PersistentVolumeClaim para armazenar os backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minecraft-backup-storage
+  namespace: minecraft-server-ns
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi  # Tamanho adequado para armazenar um mês de backups
+
+---
+# 5. ConfigMap com script de backup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minecraft-backup-script
+  namespace: minecraft-server-ns
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -e  # Encerra o script se qualquer comando falhar
+    
+    # Configura variáveis
+    BACKUP_DIR="/backups"
+    SOURCE_DIR="/minecraft-data"
+    RETENTION_DAYS=30
+    TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+    BACKUP_FILE="$BACKUP_DIR/minecraft-backup-$TIMESTAMP.tar.gz"
+    
+    # Envia mensagens ao servidor via RCON (se disponível)
+    if [ -x "$(command -v rcon-cli)" ]; then
+      echo "Notificando jogadores sobre o backup..."
+      rcon-cli --host localhost --port 25575 --password $RCON_PASSWORD "say §e[SISTEMA] §6Iniciando backup do servidor... Pode haver alguma lentidão."
+      rcon-cli --host localhost --port 25575 --password $RCON_PASSWORD "save-all"
+      rcon-cli --host localhost --port 25575 --password $RCON_PASSWORD "save-off"
+      sleep 5
+    else
+      echo "RCON não disponível. Continuando sem notificar jogadores."
+    fi
+    
+    # Diretórios e arquivos para excluir do backup
+    echo "Iniciando backup em $(date)"
+    echo "Compactando arquivos do servidor..."
+    
+    # Criar backup com exclusões para arquivos problemáticos
+    tar -czf "$BACKUP_FILE" \
+      --exclude="./logs/*.log.gz" \
+      --exclude="./crash-reports" \
+      --exclude="./debug" \
+      --warning=no-file-changed \
+      -C "$SOURCE_DIR" .
+    
+    BACKUP_STATUS=$?
+    
+    # Reativa o salvamento (se RCON disponível)
+    if [ -x "$(command -v rcon-cli)" ]; then
+      rcon-cli --host localhost --port 25575 --password $RCON_PASSWORD "save-on"
+      rcon-cli --host localhost --port 25575 --password $RCON_PASSWORD "say §e[SISTEMA] §aBackup concluído."
+    fi
+    
+    # Verifica se o backup foi bem-sucedido (aceita código 0 ou 1)
+    if [ $BACKUP_STATUS -eq 0 ] || [ $BACKUP_STATUS -eq 1 ]; then
+      echo "Backup concluído com sucesso: $BACKUP_FILE"
+      echo "Tamanho do backup: $(du -h $BACKUP_FILE | cut -f1)"
+    else
+      echo "Falha ao criar backup! Código de erro: $BACKUP_STATUS"
+      exit 1
+    fi
+    
+    # Remove backups mais antigos que o período de retenção
+    echo "Verificando e removendo backups antigos (mais de $RETENTION_DAYS dias)..."
+    find "$BACKUP_DIR" -name "minecraft-backup-*.tar.gz" -type f -mtime +$RETENTION_DAYS -delete
+    
+    # Relatório final de uso de espaço
+    echo "Espaço total usado por backups: $(du -sh $BACKUP_DIR | cut -f1)"
+    echo "Processo de backup finalizado em $(date)."
+
+---
+# 6. CronJob para executar o backup automaticamente
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minecraft-backup
+  namespace: minecraft-server-ns
+spec:
+  schedule: "0 */12 * * *"  # A cada 12 horas (às 00:00 e 12:00)
+  concurrencyPolicy: Forbid  # Não permite execuções sobrepostas
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup-container
+            image: bitnami/minideb:latest  # Imagem leve com ferramentas básicas
+            command:
+            - /bin/bash
+            - /scripts/backup.sh
+            volumeMounts:
+            - name: minecraft-data-source
+              mountPath: /minecraft-data
+              readOnly: true  # Acesso somente leitura aos dados do servidor
+            - name: backup-storage
+              mountPath: /backups
+            - name: backup-script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: minecraft-data-source
+            persistentVolumeClaim:
+              claimName: minecraft-data-minecraft-server-0  # Referência ao PVC criado pelo StatefulSet
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: minecraft-backup-storage
+          - name: backup-script
+            configMap:
+              name: minecraft-backup-script
+              defaultMode: 0755  # Torna o script executável
+
