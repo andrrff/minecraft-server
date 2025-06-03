@@ -34,6 +34,7 @@ spec:
       labels:
         app: minecraft-server # Labels aplicados ao pod
     spec:
+      hostNetwork: true # Adicionado: usa a rede do host para melhor conectividade
       nodeSelector:
         kubernetes.io/os: linux # Garante que o pod rode em nós Linux
       containers:
@@ -42,8 +43,10 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 25565 # Porta padrão do Minecraft
+              hostPort: 25566 # Adicionado: mapeia para uma porta diferente no host
               name: minecraft-tcp
             - containerPort: 25575 # Porta para RCON
+              hostPort: 25576 # Adicionado: mapeia para uma porta diferente no host
               name: rcon-tcp
 
           env:
@@ -147,29 +150,31 @@ spec:
 
 ---
 # 3. Service
-# Expõe o servidor Minecraft para acesso externo.
+# Expõe o servidor Minecraft para acesso externo usando NodePort.
 apiVersion: v1
 kind: Service
 metadata:
   name: minecraft-service
-  namespace: minecraft-server-ns # No mesmo namespace
+  namespace: minecraft-server-ns
   labels:
     app: minecraft-server
 spec:
-  type: LoadBalancer # Expõe usando um LoadBalancer (requer suporte do provedor de nuvem)
-  # Se LoadBalancer não estiver disponível (ex: Minikube local), use NodePort:
-  # type: NodePort
+  type: NodePort
+  externalTrafficPolicy: Local 
   ports:
-    - port: 25565 # Porta externa
-      targetPort: minecraft-tcp # Porta do container (nomeada no StatefulSet)
+    - port: 25565
+      targetPort: 25565
+      # É obrigatório que o nodePort esteja no intervalo 30000-32767
+      nodePort: 32414  # Porta externa do Kubernetes
       protocol: TCP
       name: minecraft-tcp
-    - port: 25575 # Porta externa para RCON
-      targetPort: rcon-tcp # Porta do container para RCON
+    - port: 25575
+      targetPort: 25575
+      nodePort: 31249  # Porta externa do Kubernetes para RCON
       protocol: TCP
       name: rcon-tcp
   selector:
-    app: minecraft-server # Seleciona os pods com este label (os do StatefulSet)
+    app: minecraft-server
 
 ---
 # 4. PersistentVolumeClaim para armazenar os backups
