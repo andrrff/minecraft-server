@@ -1,9 +1,10 @@
 # Arquivo YAML para implantar um servidor Minecraft (modo offline) no Kubernetes
 # Imagem Docker: itzg/minecraft-server
+# This version relies on dynamic provisioning by the 'microk8s-hostpath' StorageClass.
+# Manually defined PersistentVolume sections have been removed.
 
 ---
 # 1. Namespace
-# Cria um namespace dedicado para os recursos do servidor Minecraft.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -15,7 +16,6 @@ spec:
 ---
 # 2. StatefulSet
 # Define o StatefulSet para gerenciar o pod do servidor Minecraft.
-# StatefulSets são ideais para aplicações com estado, como servidores de jogos.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -34,11 +34,11 @@ spec:
       labels:
         app: minecraft-server # Labels aplicados ao pod
     spec:
-      # Add a small delay to give the provisioner time to work
       initContainers:
       - name: volume-wait
         image: busybox
-        command: ["sh", "-c", "echo 'Waiting for volumes to be attached...' && sleep 5"]
+        # Increased sleep slightly to give more time for dynamic provisioner
+        command: ["sh", "-c", "echo 'Waiting for volumes to be attached by provisioner...' && sleep 10"]
       containers:
         - name: minecraft-server-container
           image: itzg/minecraft-server:latest # Imagem Docker do servidor Minecraft
@@ -55,24 +55,24 @@ spec:
               value: "TRUE"
             - name: ONLINE_MODE
               value: "false"
-            - name: MEMORY
-              value: "" # Let the image's startup script or JVM_XX_OPTS handle it
+            - name: MEMORY # Let the image's startup script or JVM_XX_OPTS handle it
+              value: ""
             - name: JVM_XX_OPTS
               value: "-XX:MaxRAMPercentage=75.0"
             - name: TYPE
-              value: "FABRIC" # Example: PAPER, SPIGOT, FORGE, FABRIC, VANILLA
+              value: "FABRIC"
             - name: VERSION
-              value: "1.21" # Specify your desired Minecraft version, or "LATEST"
+              value: "1.21" # Specify your desired Minecraft version
 
             # Configurações de AFK e ociosidade
             - name: ENABLE_AUTOPAUSE
               value: "true"
             - name: AUTOPAUSE_TIMEOUT_EST
-              value: "900" # 15 minutos antes de considerar um jogador como AFK
+              value: "900"
             - name: AUTOPAUSE_TIMEOUT_INIT
-              value: "300" # 5 minutos antes de pausar o servidor após o último jogador sair
+              value: "300"
             - name: AUTOPAUSE_PERIOD
-              value: "10" # Intervalo em segundos para verificar jogadores AFK
+              value: "10"
 
             # Configurações do Jogo (Exemplos)
             - name: SERVER_NAME
@@ -82,7 +82,7 @@ spec:
             - name: WELCOME_MESSAGE
               value: "§2Bem-vindo ao servidor, §b{PLAYER}§2! Esperamos que você se divirta conosco.\n§6Regras:\n§f- Respeite os outros jogadores\n§f- Não griefing\n§f- Divirta-se!"
             - name: DIFFICULTY
-              value: "normal" # easy, normal, hard, peaceful
+              value: "normal"
             - name: MAX_PLAYERS
               value: "15"
             - name: SPAWN_PROTECTION
@@ -102,7 +102,7 @@ spec:
             - name: VIEW_DISTANCE
               value: "18"
             - name: SEED
-              value: "7328636133801045505" # Seed do mundo personalizada
+              value: "7328636133801045505"
 
             # Configurações do RCON (habilitado)
             - name: ENABLE_RCON
@@ -110,43 +110,44 @@ spec:
             - name: RCON_PORT
               value: "25575"
             - name: RCON_PASSWORD
-              value: "minecraft_secure_password" # Recomendado: use uma senha mais segura
+              # Ensure this password matches the one in your 'minecraft-rcon-secret'
+              value: "minecraft_secure_password"
 
           volumeMounts:
-            - name: minecraft-data # Monta o volume persistente
-              mountPath: /data # Diretório onde os dados do servidor são armazenados na imagem
-          resources: # Requisições e limites de recursos (ajuste conforme necessário)
+            - name: minecraft-data # Mounts the PVC created by volumeClaimTemplates
+              mountPath: /data
+          resources: # Requisições e limites de recursos
             requests:
               memory: "256Mi"
               cpu: "100m"
             limits:
-              memory: "7Gi" # Máximo de memória permitida
-              cpu: "2000m"  # Máximo de CPU permitida (2 cores)
-          livenessProbe: # Verifica se o container está vivo
+              memory: "7Gi"
+              cpu: "2000m"
+          livenessProbe:
             tcpSocket:
               port: 25565
-            initialDelaySeconds: 120 # Increased initial delay
+            initialDelaySeconds: 120
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 3
-          readinessProbe: # Verifica se o container está pronto para receber tráfego
+          readinessProbe:
             tcpSocket:
               port: 25565
-            initialDelaySeconds: 180 # Increased initial delay (tempo para o servidor iniciar completamente)
+            initialDelaySeconds: 180
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5
 
   volumeClaimTemplates: # Define o template para o PersistentVolumeClaim
     - metadata:
-        name: minecraft-data # Nome do PVC (será prefixado com o nome do pod)
+        name: minecraft-data # PVC name will be 'minecraft-data-minecraft-server-0'
         namespace: minecraft-server-ns
       spec:
-        accessModes: [ "ReadWriteOnce" ] # Permite leitura e escrita por um único nó
+        accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
-        # Use a storage class padrão do MicroK8s
+            storage: 10Gi
+        # Rely on dynamic provisioning by the specified StorageClass
         storageClassName: "microk8s-hostpath"
 
 ---
@@ -165,61 +166,26 @@ spec:
   ports:
     - port: 25565
       targetPort: 25565
-      nodePort: 32414 # Certifique-se que esta porta não está em uso no host
+      nodePort: 32414 # Ensure this port is free on your host
       protocol: TCP
       name: minecraft-tcp
     - port: 25575
       targetPort: 25575
-      nodePort: 31249 # Certifique-se que esta porta não está em uso no host
+      nodePort: 31249 # Ensure this port is free on your host
       protocol: TCP
       name: rcon-tcp
   selector:
     app: minecraft-server
 
 ---
-# Create a dedicated PV for the Minecraft data
-# This helps ensure there's storage available before the pod is scheduled
-# Note: For 'microk8s-hostpath' with dynamic provisioning, manually creating PVs might not always be necessary
-# if the StorageClass is set up for it. However, pre-creating can give more control.
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: minecraft-data-pv
-  # NO NAMESPACE FOR PVs (they are cluster-scoped)
-spec:
-  capacity:
-    storage: 10Gi
-  volumeMode: Filesystem
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain # Or Delete, depending on your needs
-  storageClassName: microk8s-hostpath
-  hostPath:
-    path: /var/minecraft-data # Ensure this path exists on your MicroK8s node(s) or is creatable
-    type: DirectoryOrCreate
-
+# PersistentVolume definitions are REMOVED.
+# We are relying on dynamic provisioning by the 'microk8s-hostpath' StorageClass.
+# The actual host paths for the dynamically created PVs will be managed by MicroK8s,
+# typically under a path like /var/snap/microk8s/common/default-storage/
 ---
-# Create a dedicated PV for backups
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: minecraft-backup-pv
-  # NO NAMESPACE FOR PVs
-spec:
-  capacity:
-    storage: 30Gi
-  volumeMode: Filesystem
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain # Or Delete
-  storageClassName: microk8s-hostpath
-  hostPath:
-    path: /var/minecraft-backups # Ensure this path exists on your MicroK8s node(s) or is creatable
-    type: DirectoryOrCreate
 
----
 # 4. PersistentVolumeClaim para armazenar os backups
-# This PVC will bind to minecraft-backup-pv
+# This PVC will also be dynamically provisioned by 'microk8s-hostpath'.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -230,11 +196,8 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 30Gi
-  # Use a storage class padrão do MicroK8s
+      storage: 30Gi # Tamanho do armazenamento para backups
   storageClassName: "microk8s-hostpath"
-  # If you want to bind to a specific PV, you can add 'volumeName: minecraft-backup-pv'
-  # but usually, the storageClassName and size match is sufficient for dynamic or pre-provisioned PVs.
 
 ---
 # 5. ConfigMap com script de backup
@@ -246,95 +209,92 @@ metadata:
 data:
   backup.sh: |
     #!/bin/bash
-    set -eo pipefail # Encerra o script se qualquer comando falhar e trata erros em pipes
+    set -eo pipefail # Exit on error, treat unset variables as an error, and propagate pipeline errors
 
-    # Configura variáveis
+    # Configuration
     BACKUP_DIR="/backups"
-    SOURCE_DIR="/minecraft-data" # This is the mount path inside the backup container
+    SOURCE_DIR="/minecraft-data" # Mount path of the Minecraft server data in this backup container
     RETENTION_DAYS=30
     TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
     BACKUP_FILE="$BACKUP_DIR/minecraft-backup-$TIMESTAMP.tar.gz"
-    RCON_HOST="minecraft-service.minecraft-server-ns.svc.cluster.local" # Use service DNS
-    RCON_PORT_VAR="${RCON_PORT:-25575}" # Use env var RCON_PORT if set, else default
-    RCON_PASSWORD_VAR="${RCON_PASSWORD}" # Expect RCON_PASSWORD to be passed as env
+    RCON_HOST="minecraft-service.minecraft-server-ns.svc.cluster.local" # Kubernetes service DNS for RCON
+    RCON_PORT_VAR="${RCON_PORT:-25575}" # Use RCON_PORT env var if set, otherwise default
+    RCON_PASSWORD_VAR="${RCON_PASSWORD}" # Expect RCON_PASSWORD to be passed as env var from Secret
 
-    # Verifica se rcon-cli está instalado
-    if ! command -v rcon-cli &> /dev/null; then
-      echo "rcon-cli não encontrado. Tentando instalar..."
-      apt-get update && apt-get install -y wget && \
-      wget https://github.com/itzg/rcon-cli/releases/download/1.6.0/rcon-cli_1.6.0_linux_amd64.tar.gz -O /tmp/rcon-cli.tar.gz && \
-      tar -xzf /tmp/rcon-cli.tar.gz -C /usr/local/bin rcon-cli && \
-      rm /tmp/rcon-cli.tar.gz
-      if ! command -v rcon-cli &> /dev/null; then
-        echo "Falha ao instalar rcon-cli. Continuando sem notificações RCON."
-        RCON_AVAILABLE="false"
-      else
-        echo "rcon-cli instalado com sucesso."
-        RCON_AVAILABLE="true"
-      fi
-    else
+    RCON_AVAILABLE="false"
+    # Check if rcon-cli is installed, if not, try to install it
+    if command -v rcon-cli &> /dev/null; then
       RCON_AVAILABLE="true"
+    else
+      echo "rcon-cli not found. Attempting to install..."
+      # Update package list and install dependencies, then rcon-cli
+      if apt-get update && apt-get install -y wget tar gzip && \
+         wget https://github.com/itzg/rcon-cli/releases/download/1.6.0/rcon-cli_1.6.0_linux_amd64.tar.gz -O /tmp/rcon-cli.tar.gz && \
+         tar -xzf /tmp/rcon-cli.tar.gz -C /usr/local/bin rcon-cli && \
+         rm /tmp/rcon-cli.tar.gz; then
+        echo "rcon-cli installed successfully."
+        RCON_AVAILABLE="true"
+      else
+        echo "Failed to install rcon-cli. Continuing without RCON notifications."
+      fi
     fi
 
+    # Function to send RCON commands
     send_rcon() {
       if [ "$RCON_AVAILABLE" == "true" ] && [ -n "$RCON_PASSWORD_VAR" ]; then
         echo "Sending RCON command: $1"
-        rcon-cli --host "$RCON_HOST" --port "$RCON_PORT_VAR" --password "$RCON_PASSWORD_VAR" "$1" || echo "RCON command failed: $1"
+        # Timeout for rcon command to prevent hanging
+        timeout 10s rcon-cli --host "$RCON_HOST" --port "$RCON_PORT_VAR" --password "$RCON_PASSWORD_VAR" "$1" || echo "RCON command failed or timed out: $1"
       else
-        echo "RCON não disponível ou senha não configurada. Comando ignorado: $1"
+        echo "RCON not available or password not configured. RCON command ignored: $1"
       fi
     }
 
-    # Envia mensagens ao servidor via RCON
+    # Notify server, save, and turn off auto-save
     send_rcon "say §e[SISTEMA] §6Iniciando backup do servidor... Pode haver alguma lentidão."
     send_rcon "save-all"
     send_rcon "save-off"
-    sleep 10 # Give some time for save-off to take effect
+    sleep 10 # Allow time for save-off to take effect
 
-    # Diretórios e arquivos para excluir do backup
-    echo "Iniciando backup em $(date)"
-    echo "Compactando arquivos do servidor de $SOURCE_DIR para $BACKUP_FILE"
+    echo "Starting backup at $(date)"
+    echo "Compressing server files from $SOURCE_DIR to $BACKUP_FILE"
 
-    # Criar backup com exclusões para arquivos problemáticos
-    # Ensure the source directory is not empty
-    if [ -z "$(ls -A $SOURCE_DIR)" ]; then
-      echo "Erro: Diretório de origem $SOURCE_DIR está vazio. Abortando backup."
-      send_rcon "save-on"
-      send_rcon "say §c[SISTEMA] §4Falha no backup: Diretório de dados vazio."
+    # Check if source directory is empty or accessible
+    if [ -z "$(ls -A $SOURCE_DIR 2>/dev/null)" ] && [ "$(find $SOURCE_DIR -mindepth 1 -print -quit 2>/dev/null)" == "" ]; then
+      echo "Error: Source directory $SOURCE_DIR is empty or not accessible. Aborting backup."
+      send_rcon "save-on" # Re-enable saving
+      send_rcon "say §c[SISTEMA] §4Backup failed: Server data directory is empty or inaccessible."
       exit 1
     fi
 
+    # Create tar.gz backup
     tar -czf "$BACKUP_FILE" \
       --exclude="./logs/*.log.gz" \
       --exclude="./crash-reports" \
       --exclude="./debug" \
       --warning=no-file-changed \
-      -C "$SOURCE_DIR" .
+      -C "$SOURCE_DIR" . # Backup the contents of SOURCE_DIR
 
     BACKUP_STATUS=$?
+    send_rcon "save-on" # Re-enable auto-save
 
-    # Reativa o salvamento (se RCON disponível)
-    send_rcon "save-on"
-
-    # Verifica se o backup foi bem-sucedido (aceita código 0 ou 1 para tar - file changed)
-    if [ $BACKUP_STATUS -eq 0 ] || [ $BACKUP_STATUS -eq 1 ]; then
-      echo "Backup concluído com sucesso: $BACKUP_FILE"
-      echo "Tamanho do backup: $(du -h "$BACKUP_FILE" | cut -f1)"
+    if [ $BACKUP_STATUS -eq 0 ] || [ $BACKUP_STATUS -eq 1 ]; then # tar exits 1 if files changed
+      echo "Backup completed successfully: $BACKUP_FILE"
+      echo "Backup size: $(du -h "$BACKUP_FILE" | cut -f1)"
       send_rcon "say §e[SISTEMA] §aBackup concluído com sucesso."
     else
-      echo "Falha ao criar backup! Código de erro: $BACKUP_STATUS"
-      send_rcon "say §c[SISTEMA] §4Falha ao criar backup. Verifique os logs."
-      # rm "$BACKUP_FILE" # Optionally remove failed backup attempt
+      echo "Failed to create backup! Error code: $BACKUP_STATUS"
+      send_rcon "say §c[SISTEMA] §4Falha ao criar backup. Verifique os logs do job de backup."
+      # rm -f "$BACKUP_FILE" # Optionally remove failed backup attempt
       exit 1
     fi
 
-    # Remove backups mais antigos que o período de retenção
-    echo "Verificando e removendo backups antigos (mais de $RETENTION_DAYS dias)..."
+    # Remove old backups
+    echo "Checking and removing old backups (older than $RETENTION_DAYS days)..."
     find "$BACKUP_DIR" -name "minecraft-backup-*.tar.gz" -type f -mtime +"$RETENTION_DAYS" -print -delete
 
-    # Relatório final de uso de espaço
-    echo "Espaço total usado por backups: $(du -sh "$BACKUP_DIR" | cut -f1)"
-    echo "Processo de backup finalizado em $(date)."
+    echo "Total space used by backups: $(du -sh "$BACKUP_DIR" | cut -f1)"
+    echo "Backup process finished at $(date)."
 
 ---
 # 6. CronJob para executar o backup automaticamente
@@ -344,8 +304,8 @@ metadata:
   name: minecraft-backup
   namespace: minecraft-server-ns
 spec:
-  schedule: "0 */12 * * *"  # A cada 12 horas (às 00:00 e 12:00 UTC by default for k8s)
-  concurrencyPolicy: Forbid   # Não permite execuções sobrepostas
+  schedule: "0 */12 * * *"  # Every 12 hours (at 00:00 and 12:00 UTC by default)
+  concurrencyPolicy: Forbid   # Do not allow concurrent runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   jobTemplate:
@@ -354,62 +314,41 @@ spec:
         spec:
           containers:
           - name: backup-container
-            image: debian:bullseye-slim # Using debian for apt-get if rcon-cli needs install
-            command:
-            - /bin/bash
-            - -c
-            - |
-              # Ensure rcon-cli is available or install it
-              if ! command -v rcon-cli &> /dev/null; then
-                echo "rcon-cli not found. Attempting to install..."
-                apt-get update && apt-get install -y wget tar gzip && \
-                wget https://github.com/itzg/rcon-cli/releases/download/1.6.0/rcon-cli_1.6.0_linux_amd64.tar.gz -O /tmp/rcon-cli.tar.gz && \
-                tar -xzf /tmp/rcon-cli.tar.gz -C /usr/local/bin rcon-cli && \
-                rm /tmp/rcon-cli.tar.gz && \
-                echo "rcon-cli installed."
-              fi
-              # Execute the backup script
-              /scripts/backup.sh
-            env: # Pass RCON password to backup script
-              - name: RCON_PASSWORD
+            image: debian:bullseye-slim # Base image for backup script
+            # The script itself handles rcon-cli installation if needed
+            command: ["/scripts/backup.sh"]
+            env:
+              - name: RCON_PASSWORD # Pass RCON password from Secret
                 valueFrom:
                   secretKeyRef:
-                    name: minecraft-rcon-secret # You should create this secret
-                    key: rcon-password
-              # Optionally, if RCON port is different from default 25575 used by itzg/minecraft-server
-              # - name: RCON_PORT 
-              #   value: "25575" 
+                    name: minecraft-rcon-secret # Name of the Secret
+                    key: rcon-password        # Key within the Secret
             volumeMounts:
-            - name: minecraft-data-source
-              mountPath: /minecraft-data # Source for backup
-              readOnly: true # Acesso somente leitura aos dados do servidor
-            - name: backup-storage
-              mountPath: /backups # Destination for backups
-            - name: backup-script
-              mountPath: /scripts # Script location
+            - name: minecraft-data-source # Source PVC (Minecraft server data)
+              mountPath: /minecraft-data
+              readOnly: true # Mount as read-only for safety
+            - name: backup-storage      # Destination PVC (backup storage)
+              mountPath: /backups
+            - name: backup-script       # ConfigMap containing the backup script
+              mountPath: /scripts
           restartPolicy: OnFailure
           volumes:
           - name: minecraft-data-source
             persistentVolumeClaim:
-              claimName: minecraft-data-minecraft-server-0 # PVC created by the StatefulSet
+              # This PVC is created by the StatefulSet's volumeClaimTemplates
+              claimName: minecraft-data-minecraft-server-0
           - name: backup-storage
             persistentVolumeClaim:
-              claimName: minecraft-backup-storage # PVC for backups
+              # This PVC is defined above for backup storage
+              claimName: minecraft-backup-storage
           - name: backup-script
             configMap:
               name: minecraft-backup-script
-              defaultMode: 0755 # Torna o script executável
+              defaultMode: 0755 # Make the script executable
 
 ---
-# OPTIONAL: Secret for RCON Password
-# Create this secret manually or via kubectl:
-# kubectl create secret generic minecraft-rcon-secret --from-literal=rcon-password='your_rcon_password_here' -n minecraft-server-ns
-#
-# apiVersion: v1
-# kind: Secret
-# metadata:
-#   name: minecraft-rcon-secret
-#   namespace: minecraft-server-ns
-# type: Opaque
-# stringData:
-#   rcon-password: "minecraft_secure_password" # Same as in StatefulSet env
+# REMINDER: Create the RCON Secret manually if it doesn't exist.
+# Example:
+# microk8s kubectl create secret generic minecraft-rcon-secret \
+#   --from-literal=rcon-password='your_actual_rcon_password' \
+#   -n minecraft-server-ns
