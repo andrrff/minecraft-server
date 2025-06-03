@@ -146,7 +146,7 @@ spec:
         resources:
           requests:
             storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
-        storageClassName: "microk8s-hostpath" # Será atualizado após instalação do novo addon
+        storageClassName: "microk8s-hostpath-storage" # Updated to use the new addon name
 
 ---
 # 3. Service
