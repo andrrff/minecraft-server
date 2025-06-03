@@ -62,7 +62,7 @@ spec:
             - name: TYPE
               value: "FABRIC"
             - name: VERSION
-              value: "1.21" # Specify your desired Minecraft version
+              value: "1.21.5" # Specify your desired Minecraft version
 
             # Configurações de AFK e ociosidade
             - name: ENABLE_AUTOPAUSE
