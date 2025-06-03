@@ -43,10 +43,8 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 25565 # Porta padrão do Minecraft
-              hostPort: 25566 # Adicionado: mapeia para uma porta diferente no host
               name: minecraft-tcp
             - containerPort: 25575 # Porta para RCON
-              hostPort: 25576 # Adicionado: mapeia para uma porta diferente no host
               name: rcon-tcp
 
           env:
@@ -146,7 +144,7 @@ spec:
         resources:
           requests:
             storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
-        storageClassName: "microk8s-hostpath-storage" # Updated to use the new addon name
+        storageClassName: "microk8s-hostpath" # Corrigido para o nome da storageClass correta
 
 ---
 # 3. Service
@@ -188,7 +186,7 @@ spec:
   resources:
     requests:
       storage: 30Gi  # Tamanho adequado para armazenar um mês de backups
-  storageClassName: "microk8s-hostpath" # Storage class para MicroK8s
+  storageClassName: "microk8s-hostpath" # Storage class correta para MicroK8s
 
 ---
 # 5. ConfigMap com script de backup
