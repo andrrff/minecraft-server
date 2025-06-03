@@ -146,7 +146,7 @@ spec:
         resources:
           requests:
             storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
-        # storageClassName: "your-storage-class" # Descomente e ajuste se você tiver uma StorageClass específica
+        storageClassName: "microk8s-hostpath" # Será atualizado após instalação do novo addon
 
 ---
 # 3. Service
@@ -164,13 +164,12 @@ spec:
   ports:
     - port: 25565
       targetPort: 25565
-      # É obrigatório que o nodePort esteja no intervalo 30000-32767
-      nodePort: 32414  # Porta externa do Kubernetes
+      nodePort: 32414
       protocol: TCP
       name: minecraft-tcp
     - port: 25575
       targetPort: 25575
-      nodePort: 31249  # Porta externa do Kubernetes para RCON
+      nodePort: 31249
       protocol: TCP
       name: rcon-tcp
   selector:
@@ -189,6 +188,7 @@ spec:
   resources:
     requests:
       storage: 30Gi  # Tamanho adequado para armazenar um mês de backups
+  storageClassName: "microk8s-hostpath" # Storage class para MicroK8s
 
 ---
 # 5. ConfigMap com script de backup
