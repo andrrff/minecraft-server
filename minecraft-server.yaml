@@ -34,9 +34,11 @@ spec:
       labels:
         app: minecraft-server # Labels aplicados ao pod
     spec:
-      hostNetwork: true # Adicionado: usa a rede do host para melhor conectividade
-      nodeSelector:
-        kubernetes.io/os: linux # Garante que o pod rode em nós Linux
+      # Add a small delay to give the provisioner time to work
+      initContainers:
+      - name: volume-wait
+        image: busybox
+        command: ["sh", "-c", "echo 'Waiting for volumes to be attached...' && sleep 5"]
       containers:
         - name: minecraft-server-container
           image: itzg/minecraft-server:latest # Imagem Docker do servidor Minecraft
@@ -115,8 +117,8 @@ spec:
               mountPath: /data # Diretório onde os dados do servidor são armazenados na imagem
           resources: # Requisições e limites de recursos (ajuste conforme necessário)
             requests:
-              memory: "1Gi" # Mínimo de memória requisitada
-              cpu: "500m"   # Mínimo de CPU requisitada (0.5 core)
+              memory: "256Mi" # Further reduced to ensure scheduling
+              cpu: "100m"
             limits:
               memory: "7Gi" # Máximo de memória permitida
               cpu: "2000m"  # Máximo de CPU permitida (2 cores)
@@ -144,7 +146,8 @@ spec:
         resources:
           requests:
             storage: 10Gi # Tamanho do armazenamento (ajuste conforme necessário)
-        storageClassName: "microk8s-hostpath" # Corrigido para o nome da storageClass correta
+        # Use a storage class padrão do MicroK8s
+        storageClassName: "microk8s-hostpath" 
 
 ---
 # 3. Service
@@ -174,6 +177,45 @@ spec:
     app: minecraft-server
 
 ---
+# Create a dedicated PV for the Minecraft data
+# This helps ensure there's storage available before the pod is scheduled
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: minecraft-data-pv
+  namespace: minecraft-server-ns
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: microk8s-hostpath
+  hostPath:
+    path: /var/minecraft-data
+    type: DirectoryOrCreate
+
+---
+# Create a dedicated PV for backups
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: minecraft-backup-pv
+  namespace: minecraft-server-ns
+spec:
+  capacity:
+    storage: 30Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: microk8s-hostpath
+  hostPath:
+    path: /var/minecraft-backups
+    type: DirectoryOrCreate
+
+---
 # 4. PersistentVolumeClaim para armazenar os backups
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -185,8 +227,9 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 30Gi  # Tamanho adequado para armazenar um mês de backups
-  storageClassName: "microk8s-hostpath" # Storage class correta para MicroK8s
+      storage: 30Gi
+  # Use a storage class padrão do MicroK8s
+  storageClassName: "microk8s-hostpath"
 
 ---
 # 5. ConfigMap com script de backup
